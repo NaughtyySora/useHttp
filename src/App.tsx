@@ -10,13 +10,13 @@ const api = {
 };
 
 export const App: FC = () => {
-  const [state, setState] = useState<any>(null);
-  const [loading, setLoading] = useState<any>(false);
+  const [state, setState] = useState(null);
+  const [loading, setLoading] = useState(false);
   const http = useHttp(api.price({ ids: "bitcoin", vs_currencies: "usd" }));
 
   const refetch = () => {
     http.get({parse: false, callback: setState, setLoading});
-  }
+  };
 
   //!features
   //- collector collect(http) collector.keys(['a1', 'a2'])(http, http2) collector.pick ...

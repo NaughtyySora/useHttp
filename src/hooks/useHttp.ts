@@ -9,10 +9,11 @@ interface iGetParams {
 };
 
 interface iOptions {
-  throttle?: number,
-  caching?: number,
-  done: boolean,
-  once: boolean,
+  throttle?: number;
+  caching?: number;
+  timer?: ReturnType<typeof setTimeout>;
+  done: boolean;
+  once: boolean;
 };
 
 const CACHE_KEY = "data";
@@ -23,6 +24,7 @@ export const useHttp = (url: string, params?: iRequestParams) => {
   const options = useRef<iOptions>({
     throttle: undefined,
     caching: undefined,
+    timer: undefined,
     done: false,
     once: false,
   });
@@ -31,9 +33,11 @@ export const useHttp = (url: string, params?: iRequestParams) => {
     setThrottle();
     const once = options.current.once && options.current.done;
     const throttle = options.current.throttle && options.current.throttle <= 0;
-
-    if (once || throttle) return Promise.resolve(null);
+    
+    if ((once || throttle || cache.current?.has(CACHE_KEY)) && options.current.timer) clearTimeout(options.current.timer);
+    if (once || throttle) return getNull(callback);
     if (cache.current?.has(CACHE_KEY)) return getFromCache(callback);
+
     connection.connect(params);
 
     return new Promise((resolve, reject) => {
@@ -42,6 +46,7 @@ export const useHttp = (url: string, params?: iRequestParams) => {
         if (event.target.status !== 200) {
           const error = new Error(errorText || "Error while uploading data");
           setLoading?.(false);
+          options.current.timer && clearTimeout(options.current.timer);
           options.current.done = true;
           return reject(error);
         };
@@ -51,6 +56,7 @@ export const useHttp = (url: string, params?: iRequestParams) => {
         saveToCache(data);
         callback?.(data);
         setLoading?.(false);
+        options.current.timer && clearTimeout(options.current.timer);
         options.current.done = true;
         return resolve(data);
       };
@@ -76,6 +82,11 @@ export const useHttp = (url: string, params?: iRequestParams) => {
     options.current.throttle--;
   };
 
+  const getNull = (callback: iGetParams["callback"]) => {
+    callback?.(null);
+    return Promise.resolve(null);
+  };
+
   return {
     get,
     cancel() {
@@ -95,7 +106,7 @@ export const useHttp = (url: string, params?: iRequestParams) => {
       return this;
     },
     throttle(amount: number, ms: number) {
-      if (options.current.throttle !== null) return this;
+      if (options.current.throttle) return this;
       options.current.throttle = amount;
 
       const timeout = () => {
@@ -109,5 +120,12 @@ export const useHttp = (url: string, params?: iRequestParams) => {
       timeout();
       return this;
     },
+    timeout(ms: number) {
+      options.current.timer = setTimeout(() => {
+        clearTimeout(options.current.timer);
+        this.cancel();
+      }, ms);
+      return this;
+    }
   };
 };
