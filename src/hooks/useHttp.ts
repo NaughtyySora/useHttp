@@ -1,87 +1,113 @@
-import { Connection, iRequestParams, tMethods } from "./Connection";
-import { prepareParams, tURLParameters } from "./prepareParams";
+import { useRef } from "react";
+import { Connection, iRequestParams } from "./Connection";
 
-export const useHttp = (path: string, searchParams?: tURLParameters) => {
-  const url = new URL(`${path}${prepareParams(searchParams)}`);
+interface iGetParams {
+  parse?: boolean;
+  callback?: (data: any) => void;
+  setLoading?: (loading: boolean) => void;
+  errorText?: string;
+};
 
-  const parallel = () => {
+interface iOptions {
+  throttle?: number,
+  caching?: number,
+  done: boolean,
+  once: boolean,
+};
 
-  };
+const CACHE_KEY = "data";
 
-  const sequential = () => {
+export const useHttp = (url: string, params?: iRequestParams) => {
+  const connection = new Connection(url);
+  const cache = useRef<null | Map<string, any>>(null);
+  const options = useRef<iOptions>({
+    throttle: undefined,
+    caching: undefined,
+    done: false,
+    once: false,
+  });
 
-  };
+  function get({ parse, callback, setLoading, errorText }: iGetParams = {}) {
+    setThrottle();
+    const once = options.current.once && options.current.done;
+    const throttle = options.current.throttle && options.current.throttle <= 0;
 
-  function execute(method: tMethods) {
-    const connection = new Connection(url, method);
-    const cache = new Map();
-    let caching: number | undefined;
-    let count: number | undefined;
+    if (once || throttle) return Promise.resolve(null);
+    if (cache.current?.has(CACHE_KEY)) return getFromCache(callback);
+    connection.connect(params);
 
-    const promise = (params?: iRequestParams) => {
-      if(typeof count === "number"){
-        if(count <= 0) return Promise.resolve();
-        count--;
-      }
-
-      if (cache.has("data")) return Promise.resolve(cache.get("data"));
-
-      connection.connect(params);
-
-      return new Promise((resolve, reject) => {
-        connection.xhr.onload = (event: any) => {
-          if (event.target.status !== 200) return reject(new Error("Error while uploading data"));
-
-          if (caching) {
-            cache.set("data", event.target.response);
-            setTimeout(cache.delete, caching, "data");
-          }
-          return resolve(event.target.response);
+    return new Promise((resolve, reject) => {
+      setLoading?.(true);
+      connection.xhr.onload = (event: any) => {
+        if (event.target.status !== 200) {
+          const error = new Error(errorText || "Error while uploading data");
+          setLoading?.(false);
+          options.current.done = true;
+          return reject(error);
         };
-      });
-    };
 
-    promise.cancel = () => {
-      connection.abort();
-    };
-
-    promise.timeout = (ms: number) => {
-      setTimeout(promise.cancel, ms);
-    };
-
-    promise.caching = (ms: number) => {
-      caching = ms;
-    };
-
-    promise.throttle = (value: number, ms: number) => {
-      count = value;
-      setInterval(() => {
-        count = value;
-      }, ms);
-    };
-
-    return promise;
+        const raw = event.target.response;
+        const data = parse ? JSON.parse(event.target.response) : raw;
+        saveToCache(data);
+        callback?.(data);
+        setLoading?.(false);
+        options.current.done = true;
+        return resolve(data);
+      };
+    });
   };
 
-  const get = execute("GET");
-  const post = execute("POST");
+  const getFromCache = (callback: iGetParams["callback"]) => {
+    const data = cache.current?.get(CACHE_KEY);
+    callback?.(data);
+    return Promise.resolve(data);
+  };
 
-  const collect = async (fn: Function, params?: iRequestParams) => {
-    try {
-      const data = await get(params);
-      const parsed = JSON.parse(data as string);
-      fn(parsed);
-    } catch (err) {
-      console.log("Error while collecting data", err);
-    }
+  const saveToCache = (data: any) => {
+    if (!options.current.caching) return;
+    cache.current?.set(CACHE_KEY, data);
+    setTimeout(() => {
+      cache.current?.delete(CACHE_KEY);
+    }, options.current.caching);
+  };
+
+  const setThrottle = () => {
+    if (!options.current.throttle) return;
+    options.current.throttle--;
   };
 
   return {
     get,
-    post,
-    execute,
-    parallel,
-    sequential,
-    collect,
+    cancel() {
+      connection.abort();
+      if (!options.current.done) options.current.done = true;
+      return this;
+    },
+    once() {
+      if (options.current.once) return this;
+      options.current.once = true;
+      return this;
+    },
+    caching(ms: number) {
+      if (cache.current) return this;
+      cache.current = new Map();
+      options.current.caching = ms;
+      return this;
+    },
+    throttle(amount: number, ms: number) {
+      if (options.current.throttle !== null) return this;
+      options.current.throttle = amount;
+
+      const timeout = () => {
+        const timer = setTimeout(() => {
+          options.current.throttle = amount;
+          clearTimeout(timer);
+          timeout();
+        }, ms);
+      };
+
+      timeout();
+      return this;
+    },
   };
 };
